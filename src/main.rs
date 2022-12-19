@@ -2,8 +2,6 @@
 
 mod app;
 
-const APP_NAME:&str = "Auto Graph";
-
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     // Log to stdout (if you run with `RUST_LOG=debug`).
@@ -11,13 +9,13 @@ fn main() {
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
-        APP_NAME,
+        "Auto Graph",
         native_options,
         Box::new(|_cc| Box::new(app::App::new())),
     );
 }
 
-// when compiling to web using trunk.
+// when building for web using trunk.
 #[cfg(target_arch = "wasm32")]
 fn main() {
     // Make sure panics are logged using `console.error`.
