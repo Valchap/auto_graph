@@ -65,7 +65,15 @@ impl App {
         let mut last_empty_line = 0;
 
         for i in (0..self.grid_values.len()).rev() {
-            if !self.grid_values[i].iter().all(|s| s.is_empty()) {
+            let mut line_empty = true;
+
+            for x in 0..self.columns.len() {
+                if self.columns[x].expression.is_empty() && !self.grid_values[i][x].is_empty() {
+                    line_empty = false;
+                }
+            }
+
+            if !line_empty {
                 last_empty_line = i + 1;
                 break;
             }
@@ -80,25 +88,37 @@ impl App {
         }
     }
 
-    pub fn get_value(&self, line: usize, column: usize) -> f64 {
-        if self.columns[column].expression.is_empty() {
-            self.grid_values[line][column]
-                .parse::<f64>()
-                .unwrap_or(f64::NAN)
-        } else {
-            let mut context = HashMapContext::new();
+    pub fn recompute_line(&mut self, line_n: usize) {
+        for column_n in (0..self.columns.len()).rev() {
+            if !self.columns[column_n].expression.is_empty() {
+                let mut context = HashMapContext::new();
 
-            for i in (column + 1)..self.columns.len() {
-                context
-                    .set_value(self.columns[i].name.clone(), self.get_value(line, i).into())
-                    .unwrap();
+                for i in (column_n + 1)..self.columns.len() {
+                    context
+                        .set_value(
+                            self.columns[i].name.clone(),
+                            self.get_value(line_n, i).into(),
+                        )
+                        .unwrap();
+                }
+
+                let result = eval_number_with_context(&self.columns[column_n].expression, &context);
+
+                self.grid_values[line_n][column_n] = result.unwrap_or(f64::NAN).to_string();
             }
-
-            let result: Result<f64, EvalexprError> =
-                eval_number_with_context(&self.columns[column].expression, &context);
-
-            result.unwrap_or(f64::NAN)
         }
+    }
+
+    pub fn recompute_all(&mut self) {
+        for line_n in 0..self.grid_values.len() - 1 {
+            self.recompute_line(line_n);
+        }
+    }
+
+    pub fn get_value(&self, line: usize, column: usize) -> f64 {
+        self.grid_values[line][column]
+            .parse::<f64>()
+            .unwrap_or(f64::NAN)
     }
 }
 
@@ -128,15 +148,19 @@ impl eframe::App for App {
 
                         ui.label("Name");
 
-                        let text_edit = egui::widgets::TextEdit::singleline(
-                            &mut self.columns[column_index].name,
-                        );
+                        if column_index > 1 {
+                            let text_edit = egui::widgets::TextEdit::singleline(
+                                &mut self.columns[column_index].name,
+                            );
 
-                        let name_input = ui.add(text_edit);
+                            let name_input = ui.add(text_edit);
 
-                        if name_input.lost_focus() {
-                            self.columns[column_index].name =
-                                self.columns[column_index].name.trim().to_owned();
+                            if name_input.lost_focus() {
+                                self.columns[column_index].name =
+                                    self.columns[column_index].name.trim().to_owned();
+                            }
+                        } else {
+                            ui.label(self.columns[column_index].name.clone());
                         }
 
                         ui.label("Expression");
@@ -159,6 +183,10 @@ impl eframe::App for App {
                         if expression_input.lost_focus() {
                             self.columns[column_index].expression =
                                 self.columns[column_index].expression.trim().to_owned();
+                        }
+
+                        if expression_input.changed() {
+                            self.recompute_all();
                         }
 
                         if column_index > 1 && ui.button("remove column").clicked() {
@@ -294,6 +322,10 @@ impl eframe::App for App {
                                         if input.lost_focus() {
                                             self.grid_values[y][x] =
                                                 self.grid_values[y][x].trim().to_owned();
+                                        }
+
+                                        if input.changed() {
+                                            self.recompute_line(y)
                                         }
                                     } else if y != self.grid_values.len() - 1 {
                                         let value = self.get_value(y, x);
