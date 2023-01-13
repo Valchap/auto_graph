@@ -1,4 +1,7 @@
-use evalexpr::*;
+use egui_extras::Column;
+use evalexpr::{
+    eval_number_with_context, ContextWithMutableVariables, EvalexprError, HashMapContext,
+};
 
 #[derive(Clone)]
 enum PopupStatus {
@@ -18,19 +21,19 @@ pub struct ColumnSettings {
 }
 
 impl ColumnSettings {
-    pub fn new(name: String) -> Self {
-        ColumnSettings {
+    pub const fn new(name: String) -> Self {
+        Self {
             name,
-            expression: "".to_owned(),
+            expression: String::new(),
         }
     }
 }
 
 impl App {
     pub fn new() -> Self {
-        let mut app = App {
-            grid_values: vec![vec![]],
-            columns: vec![],
+        let mut app = Self {
+            grid_values: Vec::new(),
+            columns: Vec::new(),
             popup_status: PopupStatus::None,
         };
 
@@ -43,22 +46,22 @@ impl App {
     pub fn add_column(&mut self, name: String) {
         self.columns.push(ColumnSettings::new(name));
 
-        for line in self.grid_values.iter_mut() {
-            line.push("".to_owned());
+        for line in &mut self.grid_values {
+            line.push(String::new());
         }
     }
 
     pub fn remove_column(&mut self, index: usize) {
         self.columns.remove(index);
 
-        for line in self.grid_values.iter_mut() {
+        for line in &mut self.grid_values {
             line.remove(index);
         }
     }
 
     pub fn add_line(&mut self) {
         self.grid_values
-            .push(vec!["".to_owned(); self.columns.len()]);
+            .push(vec![String::new(); self.columns.len()]);
     }
 
     pub fn ensure_empty_line(&mut self) {
@@ -267,9 +270,9 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui_extras::TableBuilder::new(ui)
-                .column(egui_extras::Size::exact(40.0))
-                .columns(egui_extras::Size::initial(100.0), self.columns.len())
-                .column(egui_extras::Size::exact(85.0))
+                .column(Column::auto().at_least(50.0))
+                .columns(Column::auto().at_least(100.0), self.columns.len())
+                .column(Column::remainder())
                 .striped(true)
                 .resizable(true)
                 .header(20.0, |mut header| {
@@ -280,7 +283,7 @@ impl eframe::App for App {
                     for column_index in 0..self.columns.len() {
                         header.col(|ui| {
                             ui.horizontal(|ui| {
-                                ui.heading(self.columns[column_index].name.to_owned());
+                                ui.heading(self.columns[column_index].name.clone());
                                 if ui.button("⚙".to_owned()).clicked() {
                                     self.popup_status = PopupStatus::ColumnSettings(column_index);
                                 }
@@ -289,9 +292,9 @@ impl eframe::App for App {
                     }
 
                     header.col(|ui| {
-                        if ui.button("New Column").clicked() {
+                        if ui.button("Add Column").clicked() {
                             self.add_column("a".to_owned());
-                            self.popup_status = PopupStatus::ColumnSettings(self.columns.len() - 1)
+                            self.popup_status = PopupStatus::ColumnSettings(self.columns.len() - 1);
                         }
                     });
                 })
@@ -300,7 +303,7 @@ impl eframe::App for App {
                         body.row(20.0, |mut row| {
                             row.col(|ui| {
                                 if y != self.grid_values.len() - 1 {
-                                    ui.label(format!("{}", y + 1));
+                                    ui.label((y + 1).to_string());
                                 }
                             });
 
@@ -325,13 +328,12 @@ impl eframe::App for App {
                                         }
 
                                         if input.changed() {
-                                            self.recompute_line(y)
+                                            self.recompute_line(y);
                                         }
                                     } else if y != self.grid_values.len() - 1 {
                                         let value = self.get_value(y, x);
 
-                                        let mut rich_text =
-                                            egui::RichText::new(format!("{}", value));
+                                        let mut rich_text = egui::RichText::new(value.to_string());
 
                                         if value.is_nan() {
                                             rich_text = rich_text.color(egui::Color32::RED);
@@ -341,7 +343,7 @@ impl eframe::App for App {
                                     }
                                 });
                             }
-                        })
+                        });
                     }
                 });
 
