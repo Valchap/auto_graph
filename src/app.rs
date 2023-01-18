@@ -1,3 +1,4 @@
+use egui::plot::{BoxElem, BoxPlot, BoxSpread};
 use egui_extras::Column;
 use evalexpr::{
     eval_number_with_context, ContextWithMutableVariables, EvalexprError, HashMapContext,
@@ -25,7 +26,7 @@ impl Value {
             raw_value: String::new(),
             raw_uncertainty: String::new(),
             value: f64::NAN,
-            uncertainty: f64::NAN,
+            uncertainty: 0.0,
         }
     }
 }
@@ -39,6 +40,7 @@ pub struct App {
 pub struct ColumnSettings {
     name: String,
     expression: String,
+    precision: usize,
 }
 
 impl ColumnSettings {
@@ -46,6 +48,7 @@ impl ColumnSettings {
         Self {
             name,
             expression: String::new(),
+            precision: 3,
         }
     }
 }
@@ -129,7 +132,9 @@ impl App {
         }
     }
 
-    fn compute_line_uncertainty(&mut self, line_n: usize) {
+    fn compute_line_with_uncertainty(&mut self, line_n: usize) {
+        self.compute_line_value(line_n);
+
         let mut reference_values: Vec<f64> = Vec::new();
 
         for column_n in 0..self.columns.len() {
@@ -144,7 +149,8 @@ impl App {
 
         let mut samplers = vec![-SAMPLE_COUNT; reference_values.len()];
 
-        let mut results = vec![0.0; self.columns.len() - reference_values.len()];
+        let mut maxs = vec![f64::NAN; self.columns.len() - reference_values.len()];
+        let mut mins = vec![f64::NAN; self.columns.len() - reference_values.len()];
 
         'outer: loop {
             let mut index = 0;
@@ -165,7 +171,9 @@ impl App {
 
             for column_n in 0..self.columns.len() {
                 if !self.columns[column_n].expression.is_empty() {
-                    results[index] += self.grid_values[line_n][column_n].value;
+                    maxs[index] = maxs[index].max(self.grid_values[line_n][column_n].value);
+                    mins[index] = mins[index].min(self.grid_values[line_n][column_n].value);
+                    index += 1;
                 }
             }
 
@@ -179,21 +187,28 @@ impl App {
                 samplers[i] = -SAMPLE_COUNT;
             }
         }
+
+        let mut index = 0;
+        for column_n in (0..self.columns.len()).rev() {
+            if self.columns[column_n].expression.is_empty() {
+                self.grid_values[line_n][column_n].value = reference_values.pop().unwrap();
+            } else {
+                self.grid_values[line_n][column_n].uncertainty = (maxs[index] - mins[index]) / 2.0;
+                index += 1;
+            }
+        }
+
+        self.compute_line_value(line_n);
     }
 
     fn compute_all(&mut self) {
         for line_n in 0..self.grid_values.len() - 1 {
-            self.compute_line_value(line_n);
+            self.compute_line_with_uncertainty(line_n);
         }
     }
 }
 
 impl eframe::App for App {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn on_close_event(&mut self) -> bool {
-        true
-    }
-
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_visuals(egui::Visuals::dark());
 
@@ -255,6 +270,15 @@ impl eframe::App for App {
                             self.compute_all();
                         }
 
+                        ui.label("Precision");
+
+                        let precision_edit = egui::widgets::DragValue::new(
+                            &mut self.columns[column_index].precision,
+                        )
+                        .clamp_range(0..=10);
+
+                        ui.add(precision_edit);
+
                         if column_index > 1 && ui.button("remove column").clicked() {
                             self.popup_status = PopupStatus::None;
                             self.remove_column(column_index);
@@ -289,20 +313,30 @@ impl eframe::App for App {
                 BoxElem::new(4.5, BoxSpread::new(1.7, 2.0, 2.2, 2.5, 2.9)).name("Day 3"),
             ]);*/
 
-            let mut point_list: Vec<[f64; 2]> = Vec::new();
+            let mut box_list: Vec<BoxElem> = Vec::new();
 
-            let mut x_square_sum = 0.0;
-            let mut xy_sum = 0.0;
+            let mut x_square_sum = 0.;
+            let mut xy_sum = 0.;
 
             for line in 0..self.grid_values.len() {
                 let x = self.grid_values[line][1].value;
                 let y = self.grid_values[line][0].value;
+                let uncertainty = self.grid_values[line][0].uncertainty;
 
                 if x.is_nan() || y.is_nan() {
                     continue;
                 }
 
-                point_list.push([x, y]);
+                box_list.push(BoxElem::new(
+                    x,
+                    BoxSpread::new(
+                        y - uncertainty,
+                        y - uncertainty / 2.,
+                        y,
+                        y + uncertainty / 2.,
+                        y + uncertainty,
+                    ),
+                ));
 
                 x_square_sum += x * x;
                 xy_sum += x * y;
@@ -317,19 +351,16 @@ impl eframe::App for App {
                 ..,
                 1024,
             ))
-            .width(2.0)
+            .width(2.)
             .color(egui::Color32::from_rgb(255, 63, 63));
 
-            let points = egui::plot::Points::new(point_list)
-                .radius(5.0)
-                .color(egui::Color32::from_rgb(255, 63, 63));
+            let box_plot = BoxPlot::new(box_list);
 
             //let line2 = egui::plot::Line::new(sin2);
             egui::plot::Plot::new("my_plot").show(ui, |plot_ui| {
                 plot_ui.line(line);
                 //plot_ui.line(line2);
-                //plot_ui.box_plot(box1);
-                plot_ui.points(points);
+                plot_ui.box_plot(box_plot);
             });
         });
 
@@ -337,12 +368,12 @@ impl eframe::App for App {
             let column_count = self.columns.len();
 
             egui_extras::TableBuilder::new(ui)
-                .column(Column::initial(30.0))
-                .columns(Column::initial(50.0), column_count * 2)
+                .column(Column::initial(30.))
+                .columns(Column::initial(50.), column_count * 2)
                 .column(Column::remainder())
                 .striped(true)
                 .resizable(true)
-                .header(20.0, |mut header| {
+                .header(20., |mut header| {
                     header.col(|ui| {
                         ui.heading("i");
                     });
@@ -371,7 +402,7 @@ impl eframe::App for App {
                 })
                 .body(|mut body| {
                     for y in 0..self.grid_values.len() {
-                        body.row(20.0, |mut row| {
+                        body.row(20., |mut row| {
                             row.col(|ui| {
                                 if y != self.grid_values.len() - 1 {
                                     ui.label((y + 1).to_string());
@@ -406,12 +437,15 @@ impl eframe::App for App {
                                                 .parse::<f64>()
                                                 .unwrap_or(f64::NAN);
 
-                                            self.compute_line_value(y);
+                                            self.compute_line_with_uncertainty(y);
                                         }
                                     } else if y != self.grid_values.len() - 1 {
                                         let value = self.grid_values[y][x].value;
 
-                                        let mut rich_text = egui::RichText::new(value.to_string());
+                                        let mut rich_text = egui::RichText::new(format!(
+                                            "{:.*}",
+                                            self.columns[x].precision, value
+                                        ));
 
                                         if value.is_nan() {
                                             rich_text = rich_text.color(egui::Color32::RED);
@@ -445,21 +479,26 @@ impl eframe::App for App {
                                         }
 
                                         if input.changed() {
-                                            self.grid_values[y][x].uncertainty = self.grid_values
-                                                [y][x]
-                                                .raw_uncertainty
-                                                .trim()
-                                                .parse::<f64>()
-                                                .unwrap_or(f64::NAN);
+                                            if self.grid_values[y][x].raw_uncertainty.is_empty() {
+                                                self.grid_values[y][x].uncertainty = 0.0;
+                                            } else {
+                                                self.grid_values[y][x].uncertainty = self
+                                                    .grid_values[y][x]
+                                                    .raw_uncertainty
+                                                    .trim()
+                                                    .parse::<f64>()
+                                                    .unwrap_or(f64::NAN);
+                                            }
 
-                                            self.compute_line_value(y);
+                                            self.compute_line_with_uncertainty(y);
                                         }
                                     } else if y != self.grid_values.len() - 1 {
                                         let uncertainty = self.grid_values[y][x].uncertainty;
 
-                                        let mut rich_text =
-                                            egui::RichText::new(uncertainty.to_string());
-
+                                        let mut rich_text = egui::RichText::new(format!(
+                                            "{:.*}",
+                                            self.columns[x].precision, uncertainty
+                                        ));
                                         if uncertainty.is_nan() {
                                             rich_text = rich_text.color(egui::Color32::RED);
                                         }
@@ -474,5 +513,10 @@ impl eframe::App for App {
 
             self.ensure_empty_line();
         });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_close_event(&mut self) -> bool {
+        true
     }
 }
