@@ -334,9 +334,11 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let column_count = self.columns.len();
+
             egui_extras::TableBuilder::new(ui)
-                .column(Column::auto().at_least(30.0))
-                .columns(Column::auto().at_least(50.0), self.columns.len() * 2)
+                .column(Column::initial(30.0))
+                .columns(Column::initial(50.0), column_count * 2)
                 .column(Column::remainder())
                 .striped(true)
                 .resizable(true)
@@ -363,7 +365,7 @@ impl eframe::App for App {
                     header.col(|ui| {
                         if ui.button("Add Column").clicked() {
                             self.add_column("a".to_owned());
-                            self.popup_status = PopupStatus::ColumnSettings(self.columns.len() - 1);
+                            self.popup_status = PopupStatus::ColumnSettings(column_count);
                         }
                     });
                 })
@@ -376,7 +378,7 @@ impl eframe::App for App {
                                 }
                             });
 
-                            for x in 0..self.columns.len() {
+                            for x in 0..column_count {
                                 // Values column
                                 row.col(|ui| {
                                     if self.columns[x].expression.is_empty() {
