@@ -4,6 +4,7 @@
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
 #![allow(clippy::too_many_lines)]
+#![allow(clippy::cast_precision_loss)]
 
 mod app;
 
@@ -30,10 +31,14 @@ fn main() {
     tracing_wasm::set_as_global_default();
 
     let web_options = eframe::WebOptions::default();
-    eframe::start_web(
-        "the_canvas_id", // hardcode it
-        web_options,
-        Box::new(|_cc| Box::new(app::App::new())),
-    )
-    .expect("failed to start eframe");
+
+    wasm_bindgen_futures::spawn_local(async {
+        eframe::start_web(
+            "the_canvas_id", // hardcode it
+            web_options,
+            Box::new(|_cc| Box::new(app::App::new())),
+        )
+        .await
+        .expect("failed to start eframe");
+    })
 }

@@ -3,14 +3,35 @@ use evalexpr::{
     eval_number_with_context, ContextWithMutableVariables, EvalexprError, HashMapContext,
 };
 
+const SAMPLE_COUNT: isize = 10;
+
 #[derive(Clone)]
 enum PopupStatus {
     None,
     ColumnSettings(usize),
 }
 
+#[derive(Clone)]
+struct Value {
+    raw_value: String,
+    raw_uncertainty: String,
+    value: f64,
+    uncertainty: f64,
+}
+
+impl Value {
+    const fn new() -> Self {
+        Self {
+            raw_value: String::new(),
+            raw_uncertainty: String::new(),
+            value: f64::NAN,
+            uncertainty: f64::NAN,
+        }
+    }
+}
+
 pub struct App {
-    grid_values: Vec<Vec<String>>,
+    grid_values: Vec<Vec<Value>>,
     columns: Vec<ColumnSettings>,
     popup_status: PopupStatus,
 }
@@ -21,7 +42,7 @@ pub struct ColumnSettings {
 }
 
 impl ColumnSettings {
-    pub const fn new(name: String) -> Self {
+    const fn new(name: String) -> Self {
         Self {
             name,
             expression: String::new(),
@@ -43,15 +64,15 @@ impl App {
         app
     }
 
-    pub fn add_column(&mut self, name: String) {
+    fn add_column(&mut self, name: String) {
         self.columns.push(ColumnSettings::new(name));
 
         for line in &mut self.grid_values {
-            line.push(String::new());
+            line.push(Value::new());
         }
     }
 
-    pub fn remove_column(&mut self, index: usize) {
+    fn remove_column(&mut self, index: usize) {
         self.columns.remove(index);
 
         for line in &mut self.grid_values {
@@ -59,39 +80,35 @@ impl App {
         }
     }
 
-    pub fn add_line(&mut self) {
+    fn add_line(&mut self) {
         self.grid_values
-            .push(vec![String::new(); self.columns.len()]);
+            .push(vec![Value::new(); self.columns.len()]);
     }
 
-    pub fn ensure_empty_line(&mut self) {
+    fn ensure_empty_line(&mut self) {
         let mut last_empty_line = 0;
 
-        for i in (0..self.grid_values.len()).rev() {
-            let mut line_empty = true;
-
+        'outer: for i in (0..self.grid_values.len()).rev() {
             for x in 0..self.columns.len() {
-                if self.columns[x].expression.is_empty() && !self.grid_values[i][x].is_empty() {
-                    line_empty = false;
+                if self.columns[x].expression.is_empty()
+                    && (!self.grid_values[i][x].raw_value.is_empty()
+                        || !self.grid_values[i][x].raw_uncertainty.is_empty())
+                {
+                    last_empty_line = i + 1;
+                    break 'outer;
                 }
             }
-
-            if !line_empty {
-                last_empty_line = i + 1;
-                break;
-            }
-        }
-
-        for _ in ((last_empty_line + 1)..self.grid_values.len()).rev() {
-            self.grid_values.pop();
         }
 
         if last_empty_line >= self.grid_values.len() {
             self.add_line();
+        } else {
+            self.grid_values
+                .drain((last_empty_line + 1)..self.grid_values.len());
         }
     }
 
-    pub fn recompute_line(&mut self, line_n: usize) {
+    fn compute_line_value(&mut self, line_n: usize) {
         for column_n in (0..self.columns.len()).rev() {
             if !self.columns[column_n].expression.is_empty() {
                 let mut context = HashMapContext::new();
@@ -100,28 +117,74 @@ impl App {
                     context
                         .set_value(
                             self.columns[i].name.clone(),
-                            self.get_value(line_n, i).into(),
+                            self.grid_values[line_n][i].value.into(),
                         )
                         .unwrap();
                 }
 
                 let result = eval_number_with_context(&self.columns[column_n].expression, &context);
 
-                self.grid_values[line_n][column_n] = result.unwrap_or(f64::NAN).to_string();
+                self.grid_values[line_n][column_n].value = result.unwrap_or(f64::NAN);
             }
         }
     }
 
-    pub fn recompute_all(&mut self) {
-        for line_n in 0..self.grid_values.len() - 1 {
-            self.recompute_line(line_n);
+    fn compute_line_uncertainty(&mut self, line_n: usize) {
+        let mut reference_values: Vec<f64> = Vec::new();
+
+        for column_n in 0..self.columns.len() {
+            if self.columns[column_n].expression.is_empty() {
+                reference_values.push(self.grid_values[line_n][column_n].value);
+            }
+        }
+
+        if reference_values.is_empty() {
+            return;
+        }
+
+        let mut samplers = vec![-SAMPLE_COUNT; reference_values.len()];
+
+        let mut results = vec![0.0; self.columns.len() - reference_values.len()];
+
+        'outer: loop {
+            let mut index = 0;
+
+            for column_n in 0..self.columns.len() {
+                if self.columns[column_n].expression.is_empty() {
+                    self.grid_values[line_n][column_n].value = reference_values[index]
+                        + samplers[index] as f64 * self.grid_values[line_n][column_n].uncertainty
+                            / SAMPLE_COUNT as f64;
+
+                    index += 1;
+                }
+            }
+
+            self.compute_line_value(line_n);
+
+            index = 0;
+
+            for column_n in 0..self.columns.len() {
+                if !self.columns[column_n].expression.is_empty() {
+                    results[index] += self.grid_values[line_n][column_n].value;
+                }
+            }
+
+            for i in (0..samplers.len()).rev() {
+                if samplers[i] < SAMPLE_COUNT {
+                    samplers[i] += 1;
+                    break;
+                } else if i == 0 {
+                    break 'outer;
+                }
+                samplers[i] = -SAMPLE_COUNT;
+            }
         }
     }
 
-    pub fn get_value(&self, line: usize, column: usize) -> f64 {
-        self.grid_values[line][column]
-            .parse::<f64>()
-            .unwrap_or(f64::NAN)
+    fn compute_all(&mut self) {
+        for line_n in 0..self.grid_values.len() - 1 {
+            self.compute_line_value(line_n);
+        }
     }
 }
 
@@ -189,7 +252,7 @@ impl eframe::App for App {
                         }
 
                         if expression_input.changed() {
-                            self.recompute_all();
+                            self.compute_all();
                         }
 
                         if column_index > 1 && ui.button("remove column").clicked() {
@@ -232,8 +295,8 @@ impl eframe::App for App {
             let mut xy_sum = 0.0;
 
             for line in 0..self.grid_values.len() {
-                let x = self.get_value(line, 1);
-                let y = self.get_value(line, 0);
+                let x = self.grid_values[line][1].value;
+                let y = self.grid_values[line][0].value;
 
                 if x.is_nan() || y.is_nan() {
                     continue;
@@ -253,11 +316,13 @@ impl eframe::App for App {
                 move |x| slope * x,
                 ..,
                 1024,
-            ));
+            ))
+            .width(2.0)
+            .color(egui::Color32::from_rgb(255, 63, 63));
 
             let points = egui::plot::Points::new(point_list)
                 .radius(5.0)
-                .color(egui::Color32::RED);
+                .color(egui::Color32::from_rgb(255, 63, 63));
 
             //let line2 = egui::plot::Line::new(sin2);
             egui::plot::Plot::new("my_plot").show(ui, |plot_ui| {
@@ -270,8 +335,8 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui_extras::TableBuilder::new(ui)
-                .column(Column::auto().at_least(50.0))
-                .columns(Column::auto().at_least(100.0), self.columns.len())
+                .column(Column::auto().at_least(30.0))
+                .columns(Column::auto().at_least(50.0), self.columns.len() * 2)
                 .column(Column::remainder())
                 .striped(true)
                 .resizable(true)
@@ -288,6 +353,10 @@ impl eframe::App for App {
                                     self.popup_status = PopupStatus::ColumnSettings(column_index);
                                 }
                             });
+                        });
+
+                        header.col(|ui| {
+                            ui.heading(format!("Δ{}", self.columns[column_index].name));
                         });
                     }
 
@@ -308,34 +377,88 @@ impl eframe::App for App {
                             });
 
                             for x in 0..self.columns.len() {
+                                // Values column
                                 row.col(|ui| {
                                     if self.columns[x].expression.is_empty() {
-                                        let valid = !self.get_value(y, x).is_nan();
+                                        let invalid = self.grid_values[y][x].value.is_nan();
 
                                         let mut text_edit = egui::widgets::TextEdit::singleline(
-                                            &mut self.grid_values[y][x],
+                                            &mut self.grid_values[y][x].raw_value,
                                         );
 
-                                        if !valid {
+                                        if invalid {
                                             text_edit = text_edit.text_color(egui::Color32::RED);
                                         }
 
                                         let input = ui.add(text_edit);
 
                                         if input.lost_focus() {
-                                            self.grid_values[y][x] =
-                                                self.grid_values[y][x].trim().to_owned();
+                                            self.grid_values[y][x].raw_value =
+                                                self.grid_values[y][x].raw_value.trim().to_owned();
                                         }
 
                                         if input.changed() {
-                                            self.recompute_line(y);
+                                            self.grid_values[y][x].value = self.grid_values[y][x]
+                                                .raw_value
+                                                .trim()
+                                                .parse::<f64>()
+                                                .unwrap_or(f64::NAN);
+
+                                            self.compute_line_value(y);
                                         }
                                     } else if y != self.grid_values.len() - 1 {
-                                        let value = self.get_value(y, x);
+                                        let value = self.grid_values[y][x].value;
 
                                         let mut rich_text = egui::RichText::new(value.to_string());
 
                                         if value.is_nan() {
+                                            rich_text = rich_text.color(egui::Color32::RED);
+                                        }
+
+                                        ui.label(rich_text);
+                                    }
+                                });
+
+                                // Uncertainty column
+                                row.col(|ui| {
+                                    if self.columns[x].expression.is_empty() {
+                                        let invalid = self.grid_values[y][x].uncertainty.is_nan();
+
+                                        let mut text_edit = egui::widgets::TextEdit::singleline(
+                                            &mut self.grid_values[y][x].raw_uncertainty,
+                                        );
+
+                                        if invalid {
+                                            text_edit = text_edit.text_color(egui::Color32::RED);
+                                        }
+
+                                        let input = ui.add(text_edit);
+
+                                        if input.lost_focus() {
+                                            self.grid_values[y][x].raw_uncertainty = self
+                                                .grid_values[y][x]
+                                                .raw_uncertainty
+                                                .trim()
+                                                .to_owned();
+                                        }
+
+                                        if input.changed() {
+                                            self.grid_values[y][x].uncertainty = self.grid_values
+                                                [y][x]
+                                                .raw_uncertainty
+                                                .trim()
+                                                .parse::<f64>()
+                                                .unwrap_or(f64::NAN);
+
+                                            self.compute_line_value(y);
+                                        }
+                                    } else if y != self.grid_values.len() - 1 {
+                                        let uncertainty = self.grid_values[y][x].uncertainty;
+
+                                        let mut rich_text =
+                                            egui::RichText::new(uncertainty.to_string());
+
+                                        if uncertainty.is_nan() {
                                             rich_text = rich_text.color(egui::Color32::RED);
                                         }
 
