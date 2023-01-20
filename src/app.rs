@@ -4,7 +4,7 @@ use evalexpr::{
     eval_number_with_context, ContextWithMutableVariables, EvalexprError, HashMapContext,
 };
 
-const SAMPLE_COUNT: isize = 10;
+const SAMPLE_COUNT: isize = 1;
 
 #[derive(Clone)]
 enum PopupStatus {
@@ -26,7 +26,7 @@ impl Value {
             raw_value: String::new(),
             raw_uncertainty: String::new(),
             value: f64::NAN,
-            uncertainty: 0.0,
+            uncertainty: 0.,
         }
     }
 }
@@ -188,13 +188,13 @@ impl App {
             }
         }
 
-        let mut index = 0;
+        let mut index = self.columns.len() - reference_values.len();
         for column_n in (0..self.columns.len()).rev() {
             if self.columns[column_n].expression.is_empty() {
                 self.grid_values[line_n][column_n].value = reference_values.pop().unwrap();
             } else {
-                self.grid_values[line_n][column_n].uncertainty = (maxs[index] - mins[index]) / 2.0;
-                index += 1;
+                index -= 1;
+                self.grid_values[line_n][column_n].uncertainty = (maxs[index] - mins[index]) / 2.;
             }
         }
 
@@ -318,49 +318,78 @@ impl eframe::App for App {
             let mut x_square_sum = 0.;
             let mut xy_sum = 0.;
 
+            let mut x_square_sum_max = 0.;
+            let mut xy_sum_max = 0.;
+
+            let mut x_square_sum_min = 0.;
+            let mut xy_sum_min = 0.;
+
+            let mut min_x = 0f64;
+            let mut max_x = 0f64;
+
             for line in 0..self.grid_values.len() {
                 let x = self.grid_values[line][1].value;
                 let y = self.grid_values[line][0].value;
-                let uncertainty = self.grid_values[line][0].uncertainty;
+                let uncertainty_x = self.grid_values[line][1].uncertainty;
+                let uncertainty_y = self.grid_values[line][0].uncertainty;
 
                 if x.is_nan() || y.is_nan() {
                     continue;
                 }
 
-                box_list.push(BoxElem::new(
-                    x,
-                    BoxSpread::new(
-                        y - uncertainty,
-                        y - uncertainty / 2.,
-                        y,
-                        y + uncertainty / 2.,
-                        y + uncertainty,
-                    ),
-                ));
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
 
-                x_square_sum += x * x;
+                box_list.push(
+                    BoxElem::new(
+                        x,
+                        BoxSpread::new(
+                            y - uncertainty_y,
+                            y - uncertainty_y / 2.,
+                            y,
+                            y + uncertainty_y / 2.,
+                            y + uncertainty_y,
+                        ),
+                    )
+                    .box_width(uncertainty_x * 2.)
+                    .whisker_width(uncertainty_x * 2.),
+                );
+
+                x_square_sum += x.powi(2);
                 xy_sum += x * y;
+
+                x_square_sum_max += (x - uncertainty_x).powi(2);
+                xy_sum_max += (x - uncertainty_x) * (y + uncertainty_y);
+
+                x_square_sum_min += (x + uncertainty_x).powi(2);
+                xy_sum_min += (x + uncertainty_x) * (y - uncertainty_y);
             }
 
             let slope = xy_sum / x_square_sum;
 
+            let slope_max = xy_sum_max / x_square_sum_max;
+            let slope_min = xy_sum_min / x_square_sum_min;
+
+            let slope_uncertainty = (slope_max - slope_min) / 2.;
+
             ui.label(format!("Slope : {slope}"));
+            ui.label(format!("Slope_uncertainty : {slope_uncertainty}"));
 
             let line = egui::plot::Line::new(egui::plot::PlotPoints::from_explicit_callback(
                 move |x| slope * x,
-                ..,
+                min_x..max_x,
                 1024,
             ))
             .width(2.)
+            .highlight(false)
             .color(egui::Color32::from_rgb(255, 63, 63));
 
             let box_plot = BoxPlot::new(box_list);
 
             //let line2 = egui::plot::Line::new(sin2);
             egui::plot::Plot::new("my_plot").show(ui, |plot_ui| {
-                plot_ui.line(line);
-                //plot_ui.line(line2);
                 plot_ui.box_plot(box_plot);
+                plot_ui.line(line);
             });
         });
 
@@ -480,7 +509,7 @@ impl eframe::App for App {
 
                                         if input.changed() {
                                             if self.grid_values[y][x].raw_uncertainty.is_empty() {
-                                                self.grid_values[y][x].uncertainty = 0.0;
+                                                self.grid_values[y][x].uncertainty = 0.;
                                             } else {
                                                 self.grid_values[y][x].uncertainty = self
                                                     .grid_values[y][x]
