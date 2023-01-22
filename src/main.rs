@@ -5,6 +5,7 @@
 #![warn(clippy::nursery)]
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::cast_precision_loss)]
+#![allow(clippy::option_if_let_else)]
 
 mod app;
 
@@ -17,11 +18,11 @@ fn main() {
     eframe::run_native(
         "Auto Graph",
         native_options,
-        Box::new(|_cc| Box::new(app::App::new())),
+        Box::new(|cc| Box::new(app::App::new(cc))),
     );
 }
 
-// when building for web using trunk.
+// when building for web using trunk
 #[cfg(target_arch = "wasm32")]
 fn main() {
     // Make sure panics are logged using `console.error`.
@@ -34,9 +35,9 @@ fn main() {
 
     wasm_bindgen_futures::spawn_local(async {
         eframe::start_web(
-            "the_canvas_id", // hardcode it
+            "the_canvas_id",
             web_options,
-            Box::new(|_cc| Box::new(app::App::new())),
+            Box::new(|cc| Box::new(app::App::new(cc))),
         )
         .await
         .expect("failed to start eframe");
