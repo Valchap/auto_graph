@@ -1,6 +1,8 @@
 # Auto Graph
 A data analysis software for small experiments
 
+Can be used as a native app (only tested for Linux) or as [web app](https://chapuis.dev/auto_graph/) on any platform
+
 # Build
 The native app can be built with :
 `cargo build --release`
