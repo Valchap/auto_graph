@@ -6,6 +6,9 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::option_if_let_else)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::struct_excessive_bools)]
+#![allow(clippy::suboptimal_flops)]
 
 mod app;
 
@@ -19,7 +22,8 @@ fn main() {
         "Auto Graph",
         native_options,
         Box::new(|cc| Box::new(app::App::new(cc))),
-    );
+    )
+    .expect("Failed to start eframe");
 }
 
 // when building for web using trunk
@@ -40,6 +44,6 @@ fn main() {
             Box::new(|cc| Box::new(app::App::new(cc))),
         )
         .await
-        .expect("failed to start eframe");
+        .expect("Failed to start eframe");
     })
 }

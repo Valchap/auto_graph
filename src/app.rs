@@ -13,6 +13,9 @@ const SAMPLE_COUNT: isize = 1;
 
 const DARK_THEME_KEY: &str = "dark_them";
 const VERTICAL_BOX_PLOT_KEY: &str = "vertical_box_plot";
+const FULL_BOX_PLOT_KEY: &str = "full_box_plot";
+const LINEAR_REGRESSION_KEY: &str = "linear_regression";
+
 const COLUMN_COUNT_KEY: &str = "column_count";
 const LINE_COUNT_KEY: &str = "line_count";
 const COLUMN_NAME_KEY: &str = "column_name";
@@ -53,6 +56,8 @@ pub struct App {
     popup_status: PopupStatus,
     dark_theme: bool,
     vertical_box_plot: bool,
+    full_box_plot: bool,
+    linear_regression: bool,
 }
 
 pub struct ColumnSettings {
@@ -79,6 +84,8 @@ impl App {
             popup_status: PopupStatus::None,
             dark_theme: false,
             vertical_box_plot: true,
+            full_box_plot: false,
+            linear_regression: true,
         };
 
         if let Some(storage) = cc.storage {
@@ -91,6 +98,18 @@ impl App {
             if let Some(vertical_box_plot_str) = storage.get_string(VERTICAL_BOX_PLOT_KEY) {
                 if let Ok(vertical_box_plot) = vertical_box_plot_str.parse::<bool>() {
                     app.vertical_box_plot = vertical_box_plot;
+                }
+            }
+
+            if let Some(full_box_plot_str) = storage.get_string(FULL_BOX_PLOT_KEY) {
+                if let Ok(full_box_plot) = full_box_plot_str.parse::<bool>() {
+                    app.full_box_plot = full_box_plot;
+                }
+            }
+
+            if let Some(linear_regression_str) = storage.get_string(LINEAR_REGRESSION_KEY) {
+                if let Ok(linear_regression) = linear_regression_str.parse::<bool>() {
+                    app.linear_regression = linear_regression;
                 }
             }
 
@@ -324,6 +343,12 @@ impl App {
                     ui.label("Box plot orientation");
                     ui.radio_value(&mut self.vertical_box_plot, true, "Vertical");
                     ui.radio_value(&mut self.vertical_box_plot, false, "Horizontal");
+                    ui.label("Box plot style");
+                    ui.radio_value(&mut self.full_box_plot, true, "Full box plot");
+                    ui.radio_value(&mut self.full_box_plot, false, "Whisker box plot");
+                    ui.label("Regression type");
+                    ui.radio_value(&mut self.linear_regression, true, "Linear regression");
+                    ui.radio_value(&mut self.linear_regression, false, "Affine regression");
                 })
             });
 
@@ -408,6 +433,8 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn Storage) {
         storage.set_string(DARK_THEME_KEY, self.dark_theme.to_string());
         storage.set_string(VERTICAL_BOX_PLOT_KEY, self.vertical_box_plot.to_string());
+        storage.set_string(FULL_BOX_PLOT_KEY, self.full_box_plot.to_string());
+        storage.set_string(LINEAR_REGRESSION_KEY, self.linear_regression.to_string());
 
         storage.set_string(COLUMN_COUNT_KEY, self.columns.len().to_string());
         storage.set_string(LINE_COUNT_KEY, self.grid.len().to_string());
@@ -623,14 +650,14 @@ impl eframe::App for App {
         SidePanel::right("graph_panel").show(ctx, |ui| {
             let mut box_list: Vec<BoxElem> = Vec::new();
 
-            let mut x_square_sum = 0.;
+            let mut x_sum = 0.;
+            let mut y_sum = 0.;
+
+            let mut xx_sum = 0.;
+
             let mut xy_sum = 0.;
 
-            let mut x_square_sum_max = 0.;
-            let mut xy_sum_max = 0.;
-
-            let mut x_square_sum_min = 0.;
-            let mut xy_sum_min = 0.;
+            let mut n = 0.0;
 
             let mut min_x = 0f64;
             let mut max_x = 0f64;
@@ -648,15 +675,17 @@ impl eframe::App for App {
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
 
+                let quartile_factor = if self.full_box_plot { 1.0 } else { 0.5 };
+
                 if self.vertical_box_plot {
                     box_list.push(
                         BoxElem::new(
                             x,
                             BoxSpread::new(
                                 y - uncertainty_y,
-                                y - uncertainty_y / 2.,
+                                y - uncertainty_y * quartile_factor,
                                 y,
-                                y + uncertainty_y / 2.,
+                                y + uncertainty_y * quartile_factor,
                                 y + uncertainty_y,
                             ),
                         )
@@ -671,9 +700,9 @@ impl eframe::App for App {
                             y,
                             BoxSpread::new(
                                 x - uncertainty_x,
-                                x - uncertainty_x / 2.,
+                                x - uncertainty_x * quartile_factor,
                                 x,
-                                x + uncertainty_x / 2.,
+                                x + uncertainty_x * quartile_factor,
                                 x + uncertainty_x,
                             ),
                         )
@@ -682,31 +711,39 @@ impl eframe::App for App {
                     );
                 }
 
-                x_square_sum += x.powi(2);
+                x_sum += x;
+                y_sum += y;
+
+                xx_sum += x * x;
+
                 xy_sum += x * y;
 
-                x_square_sum_max += (x - uncertainty_x).powi(2);
-                xy_sum_max += (x - uncertainty_x) * (y + uncertainty_y);
-
-                x_square_sum_min += (x + uncertainty_x).powi(2);
-                xy_sum_min += (x + uncertainty_x) * (y - uncertainty_y);
+                n += 1.0;
             }
 
-            let slope = xy_sum / x_square_sum;
+            let line = if self.linear_regression {
+                let slope = xy_sum / xx_sum;
 
-            let slope_max = xy_sum_max / x_square_sum_max;
-            let slope_min = xy_sum_min / x_square_sum_min;
+                ui.label(format!("Slope : {slope}"));
 
-            let slope_uncertainty = (slope_max - slope_min) / 2.;
+                Line::new(PlotPoints::from_explicit_callback(
+                    move |x| slope * x,
+                    min_x..max_x,
+                    1024,
+                ))
+            } else {
+                let slope = (n * xy_sum - x_sum * y_sum) / (n * xx_sum - x_sum.powi(2));
+                let height = (y_sum - slope * x_sum) / n;
 
-            ui.label(format!("Slope : {slope}"));
-            ui.label(format!("Slope_uncertainty : {slope_uncertainty}"));
+                ui.label(format!("Slope : {slope}"));
+                ui.label(format!("Height : {height}"));
 
-            let line = Line::new(PlotPoints::from_explicit_callback(
-                move |x| slope * x,
-                min_x..max_x,
-                1024,
-            ))
+                Line::new(PlotPoints::from_explicit_callback(
+                    move |x| slope * x + height,
+                    min_x..max_x,
+                    1024,
+                ))
+            }
             .width(2.)
             .highlight(false)
             .color(Color32::from_rgb(255, 63, 63));
